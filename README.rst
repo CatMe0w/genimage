@@ -1,4 +1,28 @@
 ==================================
+Genimage for Windows
+==================================
+
+This is an incomplete Windows port of genimage.
+
+1. Install MSYS2 from https://www.msys2.org/
+2. Open "MSYS2 UCRT64"
+3. Install the required packages::
+
+    pacman -S mingw-w64-ucrt-x86_64-gcc autoconf automake libtool make pkgconf mingw-w64-ucrt-x86_64-confuse
+
+4. Build the project::
+
+    git clone https://github.com/CatMe0w/genimage.git
+    cd genimage
+    ./autogen.sh
+    ./configure --disable-shared --enable-static
+    make -j$(nproc)
+
+5. Copy ``libconfuse-2.dll`` to the directory containing `genimage.exe` for using outside of MSYS2::
+
+    cp /mingw64/bin/libconfuse-2.dll .
+
+==================================
 Genimage - The Image Creation Tool
 ==================================
 
