@@ -26,6 +26,28 @@
 
 #include "genimage.h"
 
+#ifdef _WIN32
+/* Windows doesn't have dprintf, provide a simple wrapper */
+#include <stdarg.h>
+static int dprintf(int fd, const char *format, ...)
+{
+	va_list args;
+	char *buf = NULL;
+	int ret;
+
+	va_start(args, format);
+	ret = vasprintf(&buf, format, args);
+	va_end(args);
+
+	if (ret < 0)
+		return ret;
+
+	ret = write(fd, buf, ret);
+	free(buf);
+	return ret;
+}
+#endif
+
 static struct partition *partition_by_name(struct image *image, const char *name)
 {
 	struct partition *part;

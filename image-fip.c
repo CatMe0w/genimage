@@ -118,8 +118,13 @@ static int fip_parse(struct image *image, cfg_t *cfg)
 
 	num_tos_fw = cfg_size(cfg, "tos-fw");
 	if (num_tos_fw > ARRAY_SIZE(tos_fw)) {
+#ifdef _WIN32
+		image_error(image, "%u tos-fw binaries given, but maximum is %llu\n",
+			    num_tos_fw, ARRAY_SIZE(tos_fw));
+#else
 		image_error(image, "%u tos-fw binaries given, but maximum is %zu\n",
 			    num_tos_fw, ARRAY_SIZE(tos_fw));
+#endif
 		return -EINVAL;
 	}
 

@@ -49,7 +49,11 @@ static int rauc_generate(struct image *image)
 	image_debug(image, "manifest = '%s'\n", manifest);
 
 	xasprintf(&tmpdir, "%s/rauc-%s", tmppath(), sanitize_path(image->file));
+#ifdef _WIN32
+	ret = systemp(image, "cmd /c if not exist \"%s\" mkdir \"%s\"", tmpdir, tmpdir);
+#else
 	ret = systemp(image, "mkdir -p '%s'", tmpdir);
+#endif
 	if (ret)
 		goto out;
 
@@ -101,8 +105,13 @@ static int rauc_generate(struct image *image)
 		tmp = strrchr(path, '/');
 		if (tmp) {
 			*tmp = '\0';
+#ifdef _WIN32
+			ret = systemp(image, "cmd /c if not exist \"%s\\%s\" mkdir \"%s\\%s\"",
+				      tmpdir, path, tmpdir, path);
+#else
 			ret = systemp(image, "mkdir -p '%s/%s'",
 				      tmpdir, path);
+#endif
 			if (ret)
 				goto out;
 		}
@@ -126,12 +135,22 @@ static int rauc_generate(struct image *image)
 			 * support part->imageoffset != 0 and then it can
 			 * replace both commands.
 			 */
+#ifdef _WIN32
+			image_error(image, "imageoffset is not supported on Windows\n");
+			ret = -ENOSYS;
+#else
 			ret = systemp(image, "dd if='%s' of='%s' iflag=skip_bytes skip=%lld",
 				      file, tmptarget, part->imageoffset);
+#endif
 
 		} else {
+#ifdef _WIN32
+			ret = systemp(image, "copy /y \"%s\" \"%s\"",
+				      file, tmptarget);
+#else
 			ret = systemp(image, "cp --remove-destination '%s' '%s'",
 				      file, tmptarget);
+#endif
 		}
 
 		free(tmptarget);
@@ -142,7 +161,11 @@ static int rauc_generate(struct image *image)
 	if (keyring)
 		xasprintf(&keyringarg, "--keyring='%s'", keyring);
 
+#ifdef _WIN32
+	systemp(image, "del /f /q \"%s\"", imageoutfile(image));
+#else
 	systemp(image, "rm -f '%s'", imageoutfile(image));
+#endif
 
 	ret = systemp(image, "%s bundle '%s' --cert='%s' --key='%s' %s %s %s '%s'",
 		      get_opt("rauc"), tmpdir, cert, key,

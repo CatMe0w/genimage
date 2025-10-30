@@ -24,6 +24,21 @@
 #include <sys/types.h>
 #include <dirent.h>
 
+#ifdef _WIN32
+/* Prevent windows.h from defining min/max macros */
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#define setenv(name, value, overwrite) _putenv_s(name, value)
+#ifndef S_IFLNK
+#define S_IFLNK 0120000
+#endif
+#ifndef lstat
+#define lstat stat
+#endif
+#endif
+
 #include "genimage.h"
 
 /*
@@ -331,8 +346,13 @@ static int image_generate(struct image *image)
 		struct stat s;
 		if (lstat(imageoutfile(image), &s) != 0 ||
 		    ((s.st_mode & S_IFMT) == S_IFREG) ||
-		    ((s.st_mode & S_IFMT) == S_IFLNK))
+		    ((s.st_mode & S_IFMT) == S_IFLNK)) {
+#ifdef _WIN32
+			systemp(image, "del /f /q \"%s\"", imageoutfile(image));
+#else
 			systemp(image, "rm -f \"%s\"", imageoutfile(image));
+#endif
+		}
 		return ret;
 	}
 
@@ -527,11 +547,19 @@ static int collect_mountpoints(void)
 
 	add_root_mountpoint();
 
+#ifdef _WIN32
+	ret = systemp(NULL, "cmd /c if not exist \"%s\" mkdir \"%s\"", tmppath(), tmppath());
+#else
 	ret = systemp(NULL, "mkdir -p \"%s\"", tmppath());
+#endif
 	if (ret)
 		return ret;
 
+#ifdef _WIN32
+	ret = systemp(NULL, "xcopy /e /i /h /k /y \"%s\" \"%s\\root\"", rootpath(), tmppath());
+#else
 	ret = systemp(NULL, "cp -a \"%s\" \"%s/root\"", rootpath(), tmppath());
+#endif
 	if (ret)
 		return ret;
 
@@ -543,6 +571,15 @@ static int collect_mountpoints(void)
 	list_for_each_entry(mp, &mountpoints, list) {
 		if (!strlen(mp->path))
 			continue;
+#ifdef _WIN32
+		ret = systemp(NULL, "move /y \"%s\\root\\%s\" \"%s\"", tmppath(), mp->path, mp->mountpath);
+		if (ret)
+			return ret;
+		ret = systemp(NULL, "mkdir \"%s\\root\\%s\"", tmppath(), mp->path);
+		if (ret)
+			return ret;
+		/* Windows doesn't have chmod/chown equivalents via cmd - skip for now */
+#else
 		ret = systemp(NULL, "mv \"%s/root/%s\" \"%s\"", tmppath(), mp->path, mp->mountpath);
 		if (ret)
 			return ret;
@@ -555,6 +592,7 @@ static int collect_mountpoints(void)
 		ret = systemp(NULL, "chown --reference=\"%s\" \"%s/root/%s\"", mp->mountpath, tmppath(), mp->path);
 		if (ret)
 			return ret;
+#endif
 		need_mtime_fixup = 1;
 	}
 
@@ -562,10 +600,15 @@ static int collect_mountpoints(void)
 	 * After the mv/mkdir of the mountpoints the timestamps of the
 	 * mountpoint and all parent dirs are changed. Fix that here.
 	 */
+#ifndef _WIN32
+	/* Windows doesn't have find/xargs/touch -r commands - skip timestamp fixup */
 	if (need_mtime_fixup)
 		ret = systemp(NULL,
 			      "find '%s/root' -depth -type d -printf '%%P\\0' | xargs -0 -I {} touch -r '%s/{}' '%s/root/{}'",
 			      tmppath(), rootpath(), tmppath());
+#else
+	(void)need_mtime_fixup;
+#endif
 
 	return ret;
 }
@@ -607,7 +650,11 @@ static void check_tmp_path(void)
 
 	dir = opendir(tmp);
 	if (!dir) {
+#ifdef _WIN32
+		ret = systemp(NULL, "cmd /c if not exist \"%s\" mkdir \"%s\"", tmppath(), tmppath());
+#else
 		ret = systemp(NULL, "mkdir -p \"%s\"", tmppath());
+#endif
 		if (ret)
 			exit(1);
 		tmppath_generated = TMPPATH_CREATED;
@@ -631,10 +678,18 @@ static void cleanup(void)
 {
 	switch (tmppath_generated) {
 	case TMPPATH_CREATED:
+#ifdef _WIN32
+		systemp(NULL, "rd /s /q \"%s\"", tmppath());
+#else
 		systemp(NULL, "rm -rf \"%s/\"", tmppath());
+#endif
 		break;
 	case TMPPATH_CHECKED:
+#ifdef _WIN32
+		systemp(NULL, "del /f /s /q \"%s\\*\"", tmppath());
+#else
 		systemp(NULL, "rm -rf \"%s\"/*", tmppath());
+#endif
 		break;
 	default:
 		break;
@@ -778,7 +833,11 @@ int main(int argc, char *argv[])
 
 	check_tmp_path();
 
+#ifdef _WIN32
+	ret = systemp(NULL, "del /f /s /q \"%s\\*\" 2>nul", tmppath());
+#else
 	ret = systemp(NULL, "rm -rf \"%s\"/*", tmppath());
+#endif
 	if (ret)
 		goto cleanup;
 
@@ -881,7 +940,11 @@ int main(int argc, char *argv[])
 	if (ret)
 		goto cleanup;
 
+#ifdef _WIN32
+	ret = systemp(NULL, "cmd /c if not exist \"%s\" mkdir \"%s\"", imagepath(), imagepath());
+#else
 	ret = systemp(NULL, "mkdir -p \"%s\"", imagepath());
+#endif
 	if (ret)
 		goto cleanup;
 

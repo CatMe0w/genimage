@@ -147,7 +147,11 @@ static ssize_t verity_sig_write_json(struct image *image,
 
 	json = fopen(imageoutfile(image), "w+");
 	if (!json) {
+#ifdef _WIN32
+		image_error(image, "Unable to open output: %s\n", strerror(errno));
+#else
 		image_error(image, "Unable to open output: %m\n");
+#endif
 		return -errno;
 	}
 
@@ -176,7 +180,11 @@ out:
 	fclose(json);
 
 	if (ret)
+#ifdef _WIN32
+		image_error(image, "Error while writing output: %s\n", strerror(-ret));
+#else
 		image_error(image, "Error while writing output: %m\n");
+#endif
 
 	return size;
 }
@@ -238,14 +246,24 @@ static int verity_sig_generate(struct image *image)
 	}
 
 	if (image->size && image->size < (unsigned long)size) {
+#ifdef _WIN32
+		image_error(image,
+			    "Specified image size (%llu) is too small, generated %lld bytes\n",
+			    image->size, size);
+#else
 		image_error(image,
 			    "Specified image size (%llu) is too small, generated %ld bytes\n",
 			    image->size, size);
+#endif
 		ret = -E2BIG;
 		goto out;
 	}
 
+#ifdef _WIN32
+	image_debug(image, "generated %lld bytes\n", size);
+#else
 	image_debug(image, "generated %ld bytes\n", size);
+#endif
 	image->size = size;
 
 out:
@@ -339,7 +357,7 @@ static int verity_generate(struct image *image)
 		return -errno;
 
 	if (image->size && image->size < (unsigned long)sb.st_size) {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
 		image_error(image,
 			    "Specified image size (%llu) is too small, generated %lld bytes\n",
 			    image->size, sb.st_size);
@@ -351,7 +369,7 @@ static int verity_generate(struct image *image)
 		return -E2BIG;
 	}
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
 	image_debug(image, "generated %lld bytes\n", sb.st_size);
 #else
 	image_debug(image, "generated %ld bytes\n", sb.st_size);

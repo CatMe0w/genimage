@@ -20,10 +20,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#ifndef _WIN32
 #include <sys/ioctl.h>
+#include <sys/wait.h>
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #ifdef HAVE_LINUX_FS_H
 #include <linux/fs.h>
 #endif
@@ -39,6 +41,61 @@
 
 #ifndef AT_NO_AUTOMOUNT
 #define AT_NO_AUTOMOUNT 0x800
+#endif
+
+#ifdef _WIN32
+#ifndef AT_FDCWD
+#define AT_FDCWD (-100)
+#endif
+#ifndef DT_DIR
+#define DT_DIR 4
+#endif
+#ifndef DT_REG
+#define DT_REG 8
+#endif
+
+/* Stub implementations for Windows */
+static inline int fsync(int fd) {
+	return _commit(fd);
+}
+
+static inline ssize_t pread(int fd, void *buf, size_t count, off_t offset) {
+	off_t orig = lseek(fd, 0, SEEK_CUR);
+	if (orig < 0) return -1;
+	if (lseek(fd, offset, SEEK_SET) < 0) return -1;
+	ssize_t n = read(fd, buf, count);
+	lseek(fd, orig, SEEK_SET);
+	return n;
+}
+
+static inline ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset) {
+	off_t orig = lseek(fd, 0, SEEK_CUR);
+	if (orig < 0) return -1;
+	if (lseek(fd, offset, SEEK_SET) < 0) return -1;
+	ssize_t n = write(fd, buf, count);
+	lseek(fd, orig, SEEK_SET);
+	return n;
+}
+
+static inline int openat(int dirfd, const char *pathname, int flags) {
+	/* Simple implementation - doesn't fully support dirfd */
+	(void)dirfd;
+	return open(pathname, flags);
+}
+
+static inline DIR *fdopendir(int fd) {
+	/* Not properly supported on Windows - return NULL */
+	(void)fd;
+	errno = ENOSYS;
+	return NULL;
+}
+
+static inline int fstatat(int dirfd, const char *pathname, struct stat *buf, int flags) {
+	/* Simple implementation - doesn't fully support dirfd */
+	(void)dirfd;
+	(void)flags;
+	return stat(pathname, buf);
+}
 #endif
 
 unsigned long long roundup(unsigned long long value, unsigned long long align)
@@ -228,8 +285,10 @@ int systemp(struct image *image, const char *fmt, ...)
 	char *buf;
 	const char *o;
 	int ret;
+#ifndef _WIN32
 	int status;
 	pid_t pid;
+#endif
 
 	va_start(args, fmt);
 
@@ -249,6 +308,17 @@ int systemp(struct image *image, const char *fmt, ...)
 
 	image_info(image, "cmd: \"%s\"%s\n", buf, o);
 
+#ifdef _WIN32
+	/* Windows: use system() */
+	ret = system(buf);
+	if (ret == -1) {
+		ret = -errno;
+		error("Failed to execute command: %s\n", strerror(errno));
+	}
+	free(buf);
+	return ret;
+#else
+	/* Linux/macOS/BSD: use fork/exec */
 	pid = fork();
 
 	if (!pid) {
@@ -274,22 +344,22 @@ int systemp(struct image *image, const char *fmt, ...)
 		execl(shell, shell, "-c", buf, NULL);
 		ret = -errno;
 		error("Cannot execute %s: %s\n", buf, strerror(errno));
-		goto err_out;
+		free(buf);
+		exit(1);
 	} else {
 		ret = waitpid(pid, &status, 0);
 		if (ret < 0) {
 			ret = -errno;
 			error("Failed to wait for command execution: %s\n", strerror(errno));
-			goto err_out;
+			free(buf);
+			return ret;
 		}
 	}
 
 	ret = WEXITSTATUS(status);
-
-err_out:
 	free(buf);
-
 	return ret;
+#endif
 }
 
 /*
@@ -633,8 +703,13 @@ int insert_image(struct image *image, struct image *sub,
 			/* Assumes 'holes' are always 0 bytes */
 			ret = write_bytes(fd, len, offset, 0, sparse);
 			if (ret) {
+#ifdef _WIN32
+				image_error(image, "writing %llu bytes failed: %s\n",
+					    len, strerror(-ret));
+#else
 				image_error(image, "writing %zu bytes failed: %s\n",
 					    len, strerror(-ret));
+#endif
 				goto out;
 			}
 			size -= len;
@@ -651,8 +726,13 @@ int insert_image(struct image *image, struct image *sub,
 			r = pread(in_fd, buf, now, in_pos);
 			if (r < 0) {
 				ret = -errno;
+#ifdef _WIN32
+				image_error(image, "reading %llu bytes from %s failed: %s\n",
+					    now, infile, strerror(errno));
+#else
 				image_error(image, "reading %zu bytes from %s failed: %s\n",
 					    now, infile, strerror(errno));
+#endif
 				goto out;
 			}
 			if (r == 0)
@@ -674,8 +754,13 @@ int insert_image(struct image *image, struct image *sub,
 	}
 
 fill:
+#ifdef _WIN32
+	image_debug(image, "adding %llu 0x%02x bytes at offset %llu\n",
+		    size, byte, offset);
+#else
 	image_debug(image, "adding %llu %#hhx bytes at offset %llu\n",
 		    size, byte, offset);
+#endif
 	ret = write_bytes(fd, size, offset, byte, sparse);
 	if (ret)
 		image_error(image, "writing %llu bytes failed: %s\n", size, strerror(-ret));
@@ -893,7 +978,9 @@ static unsigned long long dir_size(struct image *image, int dirfd,
 	DIR *dir;
 	int fd;
 	unsigned long long size = 0;
+#ifndef _WIN32
 	struct stat st;
+#endif
 
 	fd = openat(dirfd, subdir, O_RDONLY);
 	if (fd < 0) {
@@ -902,7 +989,13 @@ static unsigned long long dir_size(struct image *image, int dirfd,
 		return 0;
 	}
 
+#ifdef _WIN32
+	/* Windows doesn't support fdopendir properly */
+	dir = NULL;
+	errno = ENOSYS;
+#else
 	dir = fdopendir(dup(fd));
+#endif
 	if (dir == NULL) {
 		image_error(image, "failed to opendir '%s': %s", subdir,
 			    strerror(errno));
@@ -910,13 +1003,27 @@ static unsigned long long dir_size(struct image *image, int dirfd,
 		return 0;
 	}
 	while ((d = readdir(dir)) != NULL) {
+#ifdef _WIN32
+		/* Windows dirent doesn't have d_type, use stat instead */
+		struct stat d_stat;
+		if (fstatat(fd, d->d_name, &d_stat, AT_NO_AUTOMOUNT) < 0)
+			continue;
+
+		if (S_ISDIR(d_stat.st_mode)) {
+#else
 		if (d->d_type == DT_DIR) {
+#endif
 			if (d->d_name[0] == '.' && (d->d_name[1] == '\0' ||
 						    (d->d_name[1] == '.' && d->d_name[2] == '\0')))
 				continue;
 			size += dir_size(image, fd, d->d_name, blocksize);
 			continue;
 		}
+#ifdef _WIN32
+		if (!S_ISREG(d_stat.st_mode))
+			continue;
+		size += ROUND_UP(d_stat.st_size, blocksize);
+#else
 		if (d->d_type != DT_REG)
 			continue;
 		if (fstatat(fd, d->d_name, &st, AT_NO_AUTOMOUNT) < 0) {
@@ -925,6 +1032,7 @@ static unsigned long long dir_size(struct image *image, int dirfd,
 			continue;
 		}
 		size += ROUND_UP(st.st_size, blocksize);
+#endif
 	}
 	closedir(dir);
 	close(fd);

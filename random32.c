@@ -20,7 +20,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#ifndef _WIN32
 #include <sys/time.h>
+#else
+#include <sys/types.h>
+#include <time.h>
+#endif
 
 #include "genimage.h"
 
@@ -66,9 +71,13 @@ static bool prng_active = false;
 
 void random32_init(void)
 {
+#ifdef _WIN32
+	srand((unsigned int)time(NULL));
+#else
 	struct timeval tv;
 	gettimeofday(&tv, NULL);
 	srandom(tv.tv_usec);
+#endif
 	prng_active = false;
 }
 
@@ -83,5 +92,9 @@ uint32_t random32(void)
 	if (prng_active) {
 		return prng_getrandom(&prng);
 	}
+#ifdef _WIN32
+	return ((uint32_t)rand() << 16) | ((uint32_t)rand() & 0xFFFF);
+#else
 	return random();
+#endif
 }
